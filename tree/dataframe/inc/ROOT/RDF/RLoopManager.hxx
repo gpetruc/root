@@ -194,43 +194,15 @@ class RLoopManager : public RNodeBase {
       fUniqueVariationsWithReaders;
 
    // deferred function calls to Jitted functions
-   struct DeferredJitFilterCall { 
+   struct DeferredJitCall { 
       std::string functionId;
-      void *wkJittedFilter;
-      void *prevNodeOnHeap;
+      std::shared_ptr<RNodeBase> *prevNodeOnHeap;
       ROOT::Internal::RDF::RColumnRegister *colRegister;
-      DeferredJitFilterCall(const std::string & id, void *filter, void *prevNode, ROOT::Internal::RDF::RColumnRegister *cols) :
-         functionId(id), wkJittedFilter(filter), prevNodeOnHeap(prevNode), colRegister(cols) {}
+      void *wkJittedNode, *argument;
+      DeferredJitCall(const std::string & id, std::shared_ptr<RNodeBase> *prevNode, ROOT::Internal::RDF::RColumnRegister *cols, void *wkNodePtr, void *arg) :
+         functionId(id), prevNodeOnHeap(prevNode), colRegister(cols), wkJittedNode(wkNodePtr), argument(arg) {}
    };
-   std::vector<DeferredJitFilterCall> fJitFilterHelperCalls;
-   struct DeferredJitDefineCall { 
-      std::string functionId;
-      void *wkJittedDefine;
-      void *prevNodeOnHeap;
-      ROOT::Internal::RDF::RColumnRegister *colRegister;
-      DeferredJitDefineCall(const std::string & id, void *define, void *prevNode, ROOT::Internal::RDF::RColumnRegister *cols) :
-         functionId(id), wkJittedDefine(define), prevNodeOnHeap(prevNode), colRegister(cols) {}
-   };
-   std::vector<DeferredJitDefineCall> fJitDefineHelperCalls;
-   struct DeferredJitVariationCall { 
-      std::string functionId;
-      void *wkJittedVariation;
-      void *prevNodeOnHeap;
-      ROOT::Internal::RDF::RColumnRegister *colRegister;
-      DeferredJitVariationCall(const std::string & id, void *define, void *prevNode, ROOT::Internal::RDF::RColumnRegister *cols) :
-         functionId(id), wkJittedVariation(define), prevNodeOnHeap(prevNode), colRegister(cols) {}
-   };
-   std::vector<DeferredJitVariationCall> fJitVariationHelperCalls;   
-   struct DeferredJitActionCall { 
-      std::string functionId;
-      void *wkJittedAction;
-      void *actionArgument;
-      void *prevNodeOnHeap;
-      ROOT::Internal::RDF::RColumnRegister *colRegister;
-      DeferredJitActionCall(const std::string & id, void *action, void *arg, void *prevNode, ROOT::Internal::RDF::RColumnRegister *cols) :
-         functionId(id), wkJittedAction(action), actionArgument(arg), prevNodeOnHeap(prevNode), colRegister(cols) {}
-   };
-   std::vector<DeferredJitActionCall> fJitActionHelperCalls;
+   std::vector<DeferredJitCall> fJitHelperCalls; 
 
 public:
    RLoopManager(TTree *tree, const ColumnNames_t &defaultBranches);
@@ -276,10 +248,7 @@ public:
    void IncrChildrenCount() final { ++fNChildren; }
    void StopProcessing() final { ++fNStopsReceived; }
    void ToJitExec(const std::string &) const;
-   void RegisterJitFilterHelperCall(const std::string &funcBody, void *wkJittedFilter, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister) ;
-   void RegisterJitDefineHelperCall(const std::string &funcBody, void *wkJittedDefine, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister) ;
-   void RegisterJitVariationHelperCall(const std::string &funcBody, void *wkJittedVariation, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister) ;
-   void RegisterJitActionHelperCall(const std::string &funcBody, void *wkJittedAction, void *actionArgument, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister) ;
+   void RegisterJitHelperCall(const std::string &funcBody, std::shared_ptr<RNodeBase> *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister, void *wkJittedPtr, void *argument=nullptr) ;
    void RegisterCallback(ULong64_t everyNEvents, std::function<void(unsigned int)> &&f);
    unsigned int GetNRuns() const { return fNRuns; }
    bool HasDataSourceColumnReaders(const std::string &col, const std::type_info &ti) const;

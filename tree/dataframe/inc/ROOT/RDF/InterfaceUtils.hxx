@@ -342,12 +342,7 @@ BookVariationJit(const std::vector<std::string> &colNames, std::string_view vari
                  RDataSource *ds, const RColumnRegister &colRegister, const ColumnNames_t &branches,
                  std::shared_ptr<RNodeBase> *upcastNodeOnHeap, bool isSingleColumn);
 
-std::string JitBuildAction(const ColumnNames_t &bl, std::shared_ptr<RDFDetail::RNodeBase> *prevNode,
-                           const std::type_info &art, const std::type_info &at, void *rOnHeap, TTree *tree,
-                           const unsigned int nSlots, const RColumnRegister &colRegister, RDataSource *ds,
-                           std::weak_ptr<RJittedAction> *jittedActionOnHeap, const bool vector2RVec = true);
-
-std::string JitBuildActionDeferred(const ColumnNames_t &bl,
+std::string JitBuildAction(const ColumnNames_t &bl,
                            const std::type_info &art, const std::type_info &at, TTree *tree,
                            const unsigned int nSlots, const RColumnRegister &colRegister, RDataSource *ds,
                            const bool vector2RVec = true);

@@ -72,31 +72,12 @@ std::string &GetCodeToJit()
    return code;
 }
 
-using JitFilterHelperFunc = void(void *, void *, ROOT::Internal::RDF::RColumnRegister*);
-std::unordered_map<std::string, JitFilterHelperFunc*> & GetJitFilterHelperFuncMap()
+using JitHelperFunc = void(RLoopManager *, std::shared_ptr<RNodeBase> *, RColumnRegister *, void *, void *);
+std::unordered_map<std::string, JitHelperFunc*> & GetJitHelperFuncMap()
 {
-   static std::unordered_map<std::string, JitFilterHelperFunc*> map;
+   static std::unordered_map<std::string, JitHelperFunc*> map;
    return map;
 }
-using JitDefineHelperFunc = void(ROOT::Detail::RDF::RLoopManager *, void *, void *, ROOT::Internal::RDF::RColumnRegister*);
-std::unordered_map<std::string, JitDefineHelperFunc*> & GetJitDefineHelperFuncMap()
-{
-   static std::unordered_map<std::string, JitDefineHelperFunc*> map;
-   return map;
-}
-using JitVariationHelperFunc = void(ROOT::Detail::RDF::RLoopManager *, void *, void *, ROOT::Internal::RDF::RColumnRegister*);
-std::unordered_map<std::string, JitVariationHelperFunc*> & GetJitVariationHelperFuncMap()
-{
-   static std::unordered_map<std::string, JitVariationHelperFunc*> map;
-   return map;
-}
-using JitActionHelperFunc = void(void *, void *, void *, ROOT::Internal::RDF::RColumnRegister*);
-std::unordered_map<std::string, JitActionHelperFunc*> & GetJitActionHelperFuncMap()
-{
-   static std::unordered_map<std::string, JitActionHelperFunc*> map;
-   return map;
-}
-
 std::unordered_map<std::string, std::string> & GetJitHelperNameMap()
 {
    static std::unordered_map<std::string, std::string> map;
@@ -901,42 +882,20 @@ void RLoopManager::Jit()
 }
 
 void RLoopManager::RunDeferredCalls() {
-   if (!fJitDefineHelperCalls.empty() || !fJitFilterHelperCalls.empty() || !fJitActionHelperCalls.empty()) {
-      R__READ_LOCKGUARD(ROOT::gCoreMutex);
+   if (!fJitHelperCalls.empty()) {
+      //R__READ_LOCKGUARD(ROOT::gCoreMutex); // no lock, these are threadsafe
       TStopwatch s2;
       s2.Start();
-      auto & funcMapD = GetJitDefineHelperFuncMap();
-      for (auto & call : fJitDefineHelperCalls) {
-         assert(funcMapD.find(call.functionId) != funcMapD.end());
-         funcMapD[call.functionId](this, call.wkJittedDefine, call.prevNodeOnHeap, call.colRegister);
+      auto & funcMap = GetJitHelperFuncMap();
+      for (auto & call : fJitHelperCalls) {
+         assert(funcMap.find(call.functionId) != funcMap.end());
+         funcMap[call.functionId](this, call.prevNodeOnHeap, call.colRegister, call.wkJittedNode, call.argument);
       }
-      auto & funcMapV = GetJitVariationHelperFuncMap();
-      for (auto & call : fJitVariationHelperCalls) {
-         assert(funcMapV.find(call.functionId) != funcMapV.end());
-         funcMapV[call.functionId](this, call.wkJittedVariation, call.prevNodeOnHeap, call.colRegister);
-      }
-      auto & funcMapF = GetJitFilterHelperFuncMap();
-      for (auto & call : fJitFilterHelperCalls) {
-         assert(funcMapF.find(call.functionId) != funcMapF.end());
-         funcMapF[call.functionId](call.wkJittedFilter, call.prevNodeOnHeap, call.colRegister);
-      }
-      auto & funcMapA = GetJitActionHelperFuncMap();
-      for (auto & call : fJitActionHelperCalls) {
-         assert(funcMapA.find(call.functionId) != funcMapA.end());
-         funcMapA[call.functionId](call.wkJittedAction, call.actionArgument, call.prevNodeOnHeap, call.colRegister);
-      }
- 
       s2.Stop();
-      R__LOG_INFO(RDFLogChannel()) << "Deferred calls (" 
-                                   <<  fJitDefineHelperCalls.size() << " defines, "
-                                   <<  fJitVariationHelperCalls.size() << " variation, "
-                                   <<  fJitFilterHelperCalls.size() << " filters, "  
-                                   <<  fJitActionHelperCalls.size() << " actions) completed"
-                                 << (s2.RealTime() > 1e-3 ? " in " + std::to_string(s2.RealTime()) + " seconds."
+      R__LOG_INFO(RDFLogChannel()) << "Deferred calls (" <<  fJitHelperCalls.size() << ") completed"
+                                   << (s2.RealTime() > 1e-3 ? " in " + std::to_string(s2.RealTime()) + " seconds."
                                                          : " in less than 1ms.");      
-      fJitDefineHelperCalls.clear();
-      fJitFilterHelperCalls.clear();
-      fJitActionHelperCalls.clear();
+      fJitHelperCalls.clear();
    }
 }
 
@@ -1101,151 +1060,37 @@ void RLoopManager::ToJitExec(const std::string &code) const
    GetCodeToJit().append(code);
 }
 
-void RLoopManager::RegisterJitFilterHelperCall(const std::string &funcCode, void *wkJittedFilter, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister)  
+void RLoopManager::RegisterJitHelperCall(const std::string &funcCode, std::shared_ptr<RNodeBase> *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister, void *wkJittedNode, void *argument)  
 {
    auto & nameMap = GetJitHelperNameMap();
-   auto & funcMap = GetJitFilterHelperFuncMap();
+   auto & funcMap = GetJitHelperFuncMap();
    {
       R__READ_LOCKGUARD(ROOT::gCoreMutex);
       auto match = nameMap.find(funcCode);
       if (match != nameMap.end()) {
-         R__LOG_DEBUG(0, RDFLogChannel()) << "JitFilterHelper " << match->second << " already defined";
-         fJitFilterHelperCalls.emplace_back(match->second, wkJittedFilter, prevNodeOnHeap, colRegister);
-         R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of existing " << match->second << ", with filter " << wkJittedFilter << ", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
+         R__LOG_DEBUG(0, RDFLogChannel()) << "JitHelper " << match->second << " already defined";
+         fJitHelperCalls.emplace_back(match->second, prevNodeOnHeap, colRegister, wkJittedNode, argument);
          return;
       }
    }
 
    {
       R__WRITE_LOCKGUARD(ROOT::gCoreMutex);
-      std::string registerId = "jitFilterRegistrator_"+std::to_string(nameMap.size());
+      std::string registerId = "jitNodeRegistrator_"+std::to_string(nameMap.size());
       nameMap[funcCode] = registerId;
-      R__LOG_DEBUG(0, RDFLogChannel()) << "JitFilterHelper new " << registerId << " defined for funcCode " << funcCode;
+      R__LOG_DEBUG(0, RDFLogChannel()) << "JitHelper new " << registerId << " defined for funcCode " << funcCode;
       // step 1: register function (now)
       std::string toDeclare = "namespace R_rdf {\n  void " + registerId + funcCode + "\n}\n";
       ROOT::Internal::RDF::InterpreterDeclare(toDeclare);
       std::stringstream registration;
-      registration << "(*(reinterpret_cast<std::unordered_map<std::string,void (*)(void*,void*,ROOT::Internal::RDF::RColumnRegister *)>*>(";
+      registration << "(*(reinterpret_cast<std::unordered_map<std::string,void (*)(ROOT::Detail::RDF::RLoopManager*,std::shared_ptr<ROOT::Detail::RDF::RNodeBase> *,ROOT::Internal::RDF::RColumnRegister *,void*,void*)>*>(";
       registration << PrettyPrintAddr((void*)(&funcMap));
       registration << ")))[\"" << registerId << "\"] = R_rdf::" << registerId << ";\n";
       std::string registrationStr = registration.str();
       GetCodeToJit().append(registrationStr);
-      fJitFilterHelperCalls.emplace_back(registerId, wkJittedFilter, prevNodeOnHeap, colRegister);
-      R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of " << registerId << ", with filter " << wkJittedFilter << ", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
-
+      fJitHelperCalls.emplace_back(registerId, prevNodeOnHeap, colRegister, wkJittedNode, argument);
    }
-
 }
-
-void RLoopManager::RegisterJitDefineHelperCall(const std::string &funcCode, void *wkJittedDefine, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister)  
-{
-   auto & nameMap = GetJitHelperNameMap();
-   auto & funcMap = GetJitDefineHelperFuncMap();
-   {
-      R__READ_LOCKGUARD(ROOT::gCoreMutex);
-      auto match = nameMap.find(funcCode);
-      if (match != nameMap.end()) {
-         R__LOG_DEBUG(0, RDFLogChannel()) << "JitDefineHelper " << match->second << " already defined";
-         fJitDefineHelperCalls.emplace_back(match->second, wkJittedDefine, prevNodeOnHeap, colRegister);
-         R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of existing " << match->second << ", with define " << wkJittedDefine << ", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
-         return;
-      }
-   }
-
-   {
-      R__WRITE_LOCKGUARD(ROOT::gCoreMutex);
-      std::string registerId = "jitDefineRegistrator_"+std::to_string(nameMap.size());
-      nameMap[funcCode] = registerId;
-      R__LOG_DEBUG(0, RDFLogChannel()) << "JitDefineHelper new " << registerId << " defined for funcCode " << funcCode;
-      // step 1: register function (now)
-      std::string toDeclare = "namespace R_rdf {\n  void " + registerId + funcCode + "\n}\n";
-      ROOT::Internal::RDF::InterpreterDeclare(toDeclare);
-      std::stringstream registration;
-      registration << "(*(reinterpret_cast<std::unordered_map<std::string,void (*)(ROOT::Detail::RDF::RLoopManager*,void*,void*,ROOT::Internal::RDF::RColumnRegister *)>*>(";
-      registration << PrettyPrintAddr((void*)(&funcMap));
-      registration << ")))[\"" << registerId << "\"] = R_rdf::" << registerId << ";\n";
-      std::string registrationStr = registration.str();
-      GetCodeToJit().append(registrationStr);
-      fJitDefineHelperCalls.emplace_back(registerId, wkJittedDefine, prevNodeOnHeap, colRegister);
-      R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of " << registerId << ", with define " << wkJittedDefine << ", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
-
-   }
-
-}
-
-void RLoopManager::RegisterJitVariationHelperCall(const std::string &funcCode, void *wkJittedVariation, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister)  
-{
-   auto & nameMap = GetJitHelperNameMap();
-   auto & funcMap = GetJitVariationHelperFuncMap();
-   {
-      R__READ_LOCKGUARD(ROOT::gCoreMutex);
-      auto match = nameMap.find(funcCode);
-      if (match != nameMap.end()) {
-         R__LOG_DEBUG(0, RDFLogChannel()) << "JitVariationHelper " << match->second << " already defined";
-         fJitVariationHelperCalls.emplace_back(match->second, wkJittedVariation, prevNodeOnHeap, colRegister);
-         R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of existing " << match->second << ", with variation " << wkJittedVariation << ", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
-         return;
-      }
-   }
-
-   {
-      R__WRITE_LOCKGUARD(ROOT::gCoreMutex);
-      std::string registerId = "jitVariationRegistrator_"+std::to_string(nameMap.size());
-      nameMap[funcCode] = registerId;
-      R__LOG_DEBUG(0, RDFLogChannel()) << "JitVariationHelper new " << registerId << " defined for funcCode " << funcCode;
-      // step 1: register function (now)
-      std::string toDeclare = "namespace R_rdf {\n  void " + registerId + funcCode + "\n}\n";
-      ROOT::Internal::RDF::InterpreterDeclare(toDeclare);
-      std::stringstream registration;
-      registration << "(*(reinterpret_cast<std::unordered_map<std::string,void (*)(ROOT::Detail::RDF::RLoopManager*,void*,void*,ROOT::Internal::RDF::RColumnRegister *)>*>(";
-      registration << PrettyPrintAddr((void*)(&funcMap));
-      registration << ")))[\"" << registerId << "\"] = R_rdf::" << registerId << ";\n";
-      std::string registrationStr = registration.str();
-      GetCodeToJit().append(registrationStr);
-      fJitVariationHelperCalls.emplace_back(registerId, wkJittedVariation, prevNodeOnHeap, colRegister);
-      R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of " << registerId << ", with variation " << wkJittedVariation << ", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
-
-   }
-
-}
-
-void RLoopManager::RegisterJitActionHelperCall(const std::string &funcCode, void *wkJittedAction, void *actionArg, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister)  
-{
-   auto & nameMap = GetJitHelperNameMap();
-   auto & funcMap = GetJitActionHelperFuncMap();
-   {
-      R__READ_LOCKGUARD(ROOT::gCoreMutex);
-      auto match = nameMap.find(funcCode);
-      if (match != nameMap.end()) {
-         R__LOG_DEBUG(0, RDFLogChannel()) << "JitActionHelper " << match->second << " already defined";
-         fJitActionHelperCalls.emplace_back(match->second, wkJittedAction, actionArg, prevNodeOnHeap, colRegister);
-         R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of existing " << match->second << ", with action " << wkJittedAction << ", arg " << actionArg <<", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
-         return;
-      }
-   }
-
-   {
-      R__WRITE_LOCKGUARD(ROOT::gCoreMutex);
-      std::string registerId = "jitActionRegistrator_"+std::to_string(nameMap.size());
-      nameMap[funcCode] = registerId;
-      R__LOG_DEBUG(0, RDFLogChannel()) << "JitActionHelper new " << registerId << " defined for funcCode " << funcCode;
-      // step 1: register function (now)
-      std::string toDeclare = "namespace R_rdf {\n  void " + registerId + funcCode + "\n}\n";
-      ROOT::Internal::RDF::InterpreterDeclare(toDeclare);
-      std::stringstream registration;
-      registration << "(*(reinterpret_cast<std::unordered_map<std::string,void (*)(void*,void*,void*,ROOT::Internal::RDF::RColumnRegister *)>*>(";
-      registration << PrettyPrintAddr((void*)(&funcMap));
-      registration << ")))[\"" << registerId << "\"] = R_rdf::" << registerId << ";\n";
-      std::string registrationStr = registration.str();
-      GetCodeToJit().append(registrationStr);
-      fJitActionHelperCalls.emplace_back(registerId, wkJittedAction, actionArg, prevNodeOnHeap, colRegister);
-      R__LOG_DEBUG(10, RDFLogChannel()) << "\nLM " << this << " book deferred call of " << registerId << ", with action " << wkJittedAction << ", arg " << actionArg << ", node " << prevNodeOnHeap << ", cols " << colRegister << "\n";
-
-   }
-
-}
-
-
 
 void RLoopManager::RegisterCallback(ULong64_t everyNEvents, std::function<void(unsigned int)> &&f)
 {

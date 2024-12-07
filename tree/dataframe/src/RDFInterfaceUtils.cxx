@@ -17,6 +17,7 @@
 #include <ROOT/RDF/RJittedFilter.hxx>
 #include <ROOT/RDF/RJittedVariation.hxx>
 #include <ROOT/RDF/RLoopManager.hxx>
+#include "ROOT/RLogger.hxx"
 #include <ROOT/RDF/RNodeBase.hxx>
 #include <ROOT/RDF/Utils.hxx>
 #include <string_view>
@@ -670,15 +671,19 @@ BookFilterJit(std::shared_ptr<RDFDetail::RNodeBase> *prevNodeOnHeap, std::string
 
    // definesOnHeap is deleted by the jitted call to JitFilterHelper
    ROOT::Internal::RDF::RColumnRegister *definesOnHeap = new ROOT::Internal::RDF::RColumnRegister(colRegister);
-   const auto definesOnHeapAddr = PrettyPrintAddr(definesOnHeap);
-   const auto prevNodeAddr = PrettyPrintAddr(prevNodeOnHeap);
 
    const auto jittedFilter = std::make_shared<RDFDetail::RJittedFilter>(
       (*prevNodeOnHeap)->GetLoopManagerUnchecked(), name,
       Union(colRegister.GetVariationDeps(parsedExpr.fUsedCols), (*prevNodeOnHeap)->GetVariations()));
 
    // Produce code snippet that creates the filter and registers it with the corresponding RJittedFilter
-   // Windows requires std::hex << std::showbase << (size_t)pointer to produce notation "0x1234"
+   // lifetime of pointees:
+   // - jittedFilter: heap-allocated weak_ptr to the actual jittedFilter that will be deleted by JitFilterHelper
+   // - prevNodeOnHeap: heap-allocated shared_ptr to the actual previous node that will be deleted by JitFilterHelper
+   // - definesOnHeap: heap-allocated, will be deleted by JitFilterHelper
+#if 0  
+   const auto definesOnHeapAddr = PrettyPrintAddr(definesOnHeap);
+   const auto prevNodeAddr = PrettyPrintAddr(prevNodeOnHeap);
    std::stringstream filterInvocation;
    filterInvocation << "ROOT::Internal::RDF::JitFilterHelper(" << funcName << ", new const char*["
                     << parsedExpr.fUsedCols.size() << "]{";
@@ -686,19 +691,31 @@ BookFilterJit(std::shared_ptr<RDFDetail::RNodeBase> *prevNodeOnHeap, std::string
       filterInvocation << "\"" << col << "\", ";
    if (!parsedExpr.fUsedCols.empty())
       filterInvocation.seekp(-2, filterInvocation.cur); // remove the last ",
-   // lifetime of pointees:
-   // - jittedFilter: heap-allocated weak_ptr to the actual jittedFilter that will be deleted by JitFilterHelper
-   // - prevNodeOnHeap: heap-allocated shared_ptr to the actual previous node that will be deleted by JitFilterHelper
-   // - definesOnHeap: heap-allocated, will be deleted by JitFilterHelper
    filterInvocation << "}, " << parsedExpr.fUsedCols.size() << ", \"" << name << "\", "
                     << "reinterpret_cast<std::weak_ptr<ROOT::Detail::RDF::RJittedFilter>*>("
                     << PrettyPrintAddr(MakeWeakOnHeap(jittedFilter)) << "), "
                     << "reinterpret_cast<std::shared_ptr<ROOT::Detail::RDF::RNodeBase>*>(" << prevNodeAddr << "),"
                     << "reinterpret_cast<ROOT::Internal::RDF::RColumnRegister*>(" << definesOnHeapAddr << ")"
                     << ");\n";
-
    auto lm = jittedFilter->GetLoopManagerUnchecked();
    lm->ToJitExec(filterInvocation.str());
+#else
+   std::stringstream filterInvocation;
+   filterInvocation << "(void *wkJittedFilter, void *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister) {\n";
+   filterInvocation << "  ROOT::Internal::RDF::JitFilterHelper(" << funcName << ", new const char*["
+                    << parsedExpr.fUsedCols.size() << "]{";
+   for (const auto &col : parsedExpr.fUsedCols)
+      filterInvocation << "\"" << col << "\", ";
+   if (!parsedExpr.fUsedCols.empty())
+      filterInvocation.seekp(-2, filterInvocation.cur); // remove the last ",
+   filterInvocation << "}, " << parsedExpr.fUsedCols.size() << ", \"" << name << "\", "
+                    << "reinterpret_cast<std::weak_ptr<ROOT::Detail::RDF::RJittedFilter>*>(wkJittedFilter),"
+                    << "reinterpret_cast<std::shared_ptr<ROOT::Detail::RDF::RNodeBase>*>(prevNodeOnHeap),"
+                    << "colRegister"
+                    << ");\n}\n";
+   auto lm = jittedFilter->GetLoopManagerUnchecked();
+   lm->RegisterJitFilterHelperCall(filterInvocation.str(), MakeWeakOnHeap(jittedFilter), prevNodeOnHeap, definesOnHeap);
+#endif
 
    return jittedFilter;
 }
@@ -719,9 +736,14 @@ std::shared_ptr<RJittedDefine> BookDefineJit(std::string_view name, std::string_
    const auto type = RetTypeOfFunc(funcName);
 
    auto definesCopy = new RColumnRegister(colRegister);
-   auto definesAddr = PrettyPrintAddr(definesCopy);
    auto jittedDefine = std::make_shared<RDFDetail::RJittedDefine>(name, type, lm, colRegister, parsedExpr.fUsedCols);
 
+   // lifetime of pointees:
+   // - lm is the loop manager, and if that goes out of scope jitting does not happen at all (i.e. will always be valid)
+   // - jittedDefine: heap-allocated weak_ptr that will be deleted by JitDefineHelper after usage
+   // - definesAddr: heap-allocated, will be deleted by JitDefineHelper after usage
+#if 0
+   auto definesAddr = PrettyPrintAddr(definesCopy);
    std::stringstream defineInvocation;
    defineInvocation << "ROOT::Internal::RDF::JitDefineHelper<ROOT::Internal::RDF::DefineTypes::RDefineTag>(" << funcName
                     << ", new const char*[" << parsedExpr.fUsedCols.size() << "]{";
@@ -730,10 +752,6 @@ std::shared_ptr<RJittedDefine> BookDefineJit(std::string_view name, std::string_
    }
    if (!parsedExpr.fUsedCols.empty())
       defineInvocation.seekp(-2, defineInvocation.cur); // remove the last ",
-   // lifetime of pointees:
-   // - lm is the loop manager, and if that goes out of scope jitting does not happen at all (i.e. will always be valid)
-   // - jittedDefine: heap-allocated weak_ptr that will be deleted by JitDefineHelper after usage
-   // - definesAddr: heap-allocated, will be deleted by JitDefineHelper after usage
    defineInvocation << "}, " << parsedExpr.fUsedCols.size() << ", \"" << name
                     << "\", reinterpret_cast<ROOT::Detail::RDF::RLoopManager*>(" << PrettyPrintAddr(&lm)
                     << "), reinterpret_cast<std::weak_ptr<ROOT::Detail::RDF::RJittedDefine>*>("
@@ -743,6 +761,27 @@ std::shared_ptr<RJittedDefine> BookDefineJit(std::string_view name, std::string_
                     << PrettyPrintAddr(upcastNodeOnHeap) << "));\n";
 
    lm.ToJitExec(defineInvocation.str());
+#else   
+   std::stringstream defineInvocation;
+   defineInvocation << "(ROOT::Detail::RDF::RLoopManager *lm, "
+                    << "void *wkJittedDefine, "
+                    << "void *prevNodeOnHeap, "
+                    << "ROOT::Internal::RDF::RColumnRegister* colRegister) {\n";
+   defineInvocation << "ROOT::Internal::RDF::JitDefineHelper<ROOT::Internal::RDF::DefineTypes::RDefineTag>(" << funcName
+                    << ", new const char*[" << parsedExpr.fUsedCols.size() << "]{";
+   for (const auto &col : parsedExpr.fUsedCols) {
+      defineInvocation << "\"" << col << "\", ";
+   }
+   if (!parsedExpr.fUsedCols.empty())
+      defineInvocation.seekp(-2, defineInvocation.cur); // remove the last ",
+   defineInvocation << "}, " << parsedExpr.fUsedCols.size() << ", \"" << name << "\","
+                    << "lm, "
+                    << "reinterpret_cast<std::weak_ptr<ROOT::Detail::RDF::RJittedDefine>*>(wkJittedDefine),"
+                    << "colRegister, "
+                    << "reinterpret_cast<std::shared_ptr<ROOT::Detail::RDF::RNodeBase>*>(prevNodeOnHeap));\n}\n";
+
+   lm.RegisterJitDefineHelperCall(defineInvocation.str(), MakeWeakOnHeap(jittedDefine), upcastNodeOnHeap, definesCopy);
+#endif
    return jittedDefine;
 }
 
@@ -759,21 +798,35 @@ std::shared_ptr<RJittedDefine> BookDefinePerSampleJit(std::string_view name, std
    auto definesAddr = PrettyPrintAddr(definesCopy);
    auto jittedDefine = std::make_shared<RDFDetail::RJittedDefine>(name, retType, lm, colRegister, ColumnNames_t{});
 
-   std::stringstream defineInvocation;
-   defineInvocation << "ROOT::Internal::RDF::JitDefineHelper<ROOT::Internal::RDF::DefineTypes::RDefinePerSampleTag>("
-                    << funcName << ", nullptr, 0, ";
    // lifetime of pointees:
    // - lm is the loop manager, and if that goes out of scope jitting does not happen at all (i.e. will always be valid)
    // - jittedDefine: heap-allocated weak_ptr that will be deleted by JitDefineHelper after usage
    // - definesAddr: heap-allocated, will be deleted by JitDefineHelper after usage
+   std::stringstream defineInvocation;
+#if 0
+   defineInvocation << "ROOT::Internal::RDF::JitDefineHelper<ROOT::Internal::RDF::DefineTypes::RDefinePerSampleTag>("
+                    << funcName << ", nullptr, 0, ";
    defineInvocation << "\"" << name << "\", reinterpret_cast<ROOT::Detail::RDF::RLoopManager*>(" << PrettyPrintAddr(&lm)
                     << "), reinterpret_cast<std::weak_ptr<ROOT::Detail::RDF::RJittedDefine>*>("
                     << PrettyPrintAddr(MakeWeakOnHeap(jittedDefine))
                     << "), reinterpret_cast<ROOT::Internal::RDF::RColumnRegister*>(" << definesAddr
                     << "), reinterpret_cast<std::shared_ptr<ROOT::Detail::RDF::RNodeBase>*>("
                     << PrettyPrintAddr(upcastNodeOnHeap) << "));\n";
-
    lm.ToJitExec(defineInvocation.str());
+#else
+   defineInvocation << "(ROOT::Detail::RDF::RLoopManager *lm, "
+                    << "void *wkJittedDefine, "
+                    << "void *prevNodeOnHeap, "
+                    << "ROOT::Internal::RDF::RColumnRegister* colRegister) {\n";
+   defineInvocation << "ROOT::Internal::RDF::JitDefineHelper<ROOT::Internal::RDF::DefineTypes::RDefinePerSampleTag>("
+                    << funcName << ", nullptr, 0, ";
+   defineInvocation << "\"" << name << "\", lm, "
+                    << "reinterpret_cast<std::weak_ptr<ROOT::Detail::RDF::RJittedDefine>*>(wkJittedDefine), "
+                    << "colRegister, "
+                    << "reinterpret_cast<std::shared_ptr<ROOT::Detail::RDF::RNodeBase>*>(prevNodeOnHeap));\n"
+                    << "}\n";
+   lm.RegisterJitDefineHelperCall(defineInvocation.str(), MakeWeakOnHeap(jittedDefine), upcastNodeOnHeap, definesCopy);
+#endif   
    return jittedDefine;
 }
 
@@ -813,6 +866,7 @@ BookVariationJit(const std::vector<std::string> &colNames, std::string_view vari
    // - lm is the loop manager, and if that goes out of scope jitting does not happen at all (i.e. will always be valid)
    // - jittedVariation: heap-allocated weak_ptr that will be deleted by JitDefineHelper after usage
    // - definesAddr: heap-allocated, will be deleted by JitDefineHelper after usage
+#if 0
    std::stringstream varyInvocation;
    varyInvocation << "ROOT::Internal::RDF::JitVariationHelper<" << (isSingleColumn ? "true" : "false") << ">("
                   << funcName << ", new const char*[" << parsedExpr.fUsedCols.size() << "]{";
@@ -841,6 +895,38 @@ BookVariationJit(const std::vector<std::string> &colNames, std::string_view vari
                   << PrettyPrintAddr(upcastNodeOnHeap) << "));\n";
 
    lm.ToJitExec(varyInvocation.str());
+#else   
+   std::stringstream varyInvocation;
+   varyInvocation << "(ROOT::Detail::RDF::RLoopManager *lm, "
+                    << "void *wkJittedVariation, "
+                    << "void *prevNodeOnHeap, "
+                    << "ROOT::Internal::RDF::RColumnRegister* colRegister) {\n"; 
+   varyInvocation << "ROOT::Internal::RDF::JitVariationHelper<" << (isSingleColumn ? "true" : "false") << ">("
+                  << funcName << ", new const char*[" << parsedExpr.fUsedCols.size() << "]{";
+   for (const auto &col : parsedExpr.fUsedCols) {
+      varyInvocation << "\"" << col << "\", ";
+   }
+   if (!parsedExpr.fUsedCols.empty())
+      varyInvocation.seekp(-2, varyInvocation.cur); // remove the last ", "
+   varyInvocation << "}, " << parsedExpr.fUsedCols.size();
+   varyInvocation << ", new const char*[" << colNames.size() << "]{";
+   for (const auto &col : colNames) {
+      varyInvocation << "\"" << col << "\", ";
+   }
+   varyInvocation.seekp(-2, varyInvocation.cur); // remove the last ", "
+   varyInvocation << "}, " << colNames.size() << ", new const char*[" << variationTags.size() << "]{";
+   for (const auto &tag : variationTags) {
+      varyInvocation << "\"" << tag << "\", ";
+   }
+   varyInvocation.seekp(-2, varyInvocation.cur); // remove the last ", "
+   varyInvocation << "}, " << variationTags.size() << ", \"" << variationName
+                  << "\", lm, "
+                  << "reinterpret_cast<std::weak_ptr<ROOT::Internal::RDF::RJittedVariation>*>(wkJittedVariation),"
+                  << "colRegister,"
+                  << "reinterpret_cast<std::shared_ptr<ROOT::Detail::RDF::RNodeBase>*>(prevNodeOnHeap));\n"
+                  << "}\n";
+   lm.RegisterJitVariationHelperCall(varyInvocation.str(), MakeWeakOnHeap(jittedVariation), upcastNodeOnHeap, colRegisterCopy);
+#endif   
    return jittedVariation;
 }
 
@@ -892,6 +978,54 @@ std::string JitBuildAction(const ColumnNames_t &cols, std::shared_ptr<RDFDetail:
                     << "), reinterpret_cast<ROOT::Internal::RDF::RColumnRegister*>(" << definesAddr << "));";
    return createAction_str.str();
 }
+
+// Jit and call something equivalent to "this->BuildAndBook<ColTypes...>(params...)"
+// (see comments in the body for actual jitted code)
+std::string JitBuildActionDeferred(const ColumnNames_t &cols,
+                           const std::type_info &helperArgType, const std::type_info &at,
+                           TTree *tree, const unsigned int nSlots, const RColumnRegister &colRegister, RDataSource *ds,
+                           const bool vector2RVec)
+{
+   // retrieve type of action as a string
+   auto actionTypeClass = TClass::GetClass(at);
+   if (!actionTypeClass) {
+      std::string exceptionText = "An error occurred while inferring the action type of the operation.";
+      throw std::runtime_error(exceptionText);
+   }
+   const std::string actionTypeName = actionTypeClass->GetName();
+   const std::string actionTypeNameBase = actionTypeName.substr(actionTypeName.rfind(':') + 1);
+
+   // retrieve type of result of the action as a string
+   const auto helperArgTypeName = TypeID2TypeName(helperArgType);
+   if (helperArgTypeName.empty()) {
+      ThrowJitBuildActionHelperTypeError(actionTypeNameBase, helperArgType);
+   }
+
+   // Build a call to CallBuildAction with the appropriate argument. When run through the interpreter, this code will
+   // just-in-time create an RAction object and it will assign it to its corresponding RJittedAction.
+   std::stringstream createAction_str;
+   createAction_str << "(void *wkJittedAction, void *actionArg, "
+                    << "void *prevNodeOnHeap, "
+                    << "ROOT::Internal::RDF::RColumnRegister* colRegister) {\n";
+   createAction_str << "ROOT::Internal::RDF::CallBuildAction<" << actionTypeName;
+   const auto columnTypeNames = GetValidatedArgTypes(cols, colRegister, tree, ds, actionTypeNameBase, vector2RVec);
+   for (auto &colType : columnTypeNames)
+      createAction_str << ", " << colType;
+   createAction_str << ">(reinterpret_cast<std::shared_ptr<ROOT::Detail::RDF::RNodeBase>*>(prevNodeOnHeap), "
+                    << "new const char*[" << cols.size() << "]{";
+   for (auto i = 0u; i < cols.size(); ++i) {
+      if (i != 0u)
+         createAction_str << ", ";
+      createAction_str << '"' << cols[i] << '"';
+   }
+   createAction_str << "}, " << cols.size() << ", " << nSlots << ", reinterpret_cast<shared_ptr<" << helperArgTypeName
+                    << ">*>(actionArg)"
+                    << ", reinterpret_cast<std::weak_ptr<ROOT::Internal::RDF::RJittedAction>*>(wkJittedAction),"
+                    << "colRegister);\n}\n";
+   return createAction_str.str();
+}
+
+
 
 bool AtLeastOneEmptyString(const std::vector<std::string_view> strings)
 {

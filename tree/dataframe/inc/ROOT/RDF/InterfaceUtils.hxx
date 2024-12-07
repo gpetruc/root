@@ -347,6 +347,12 @@ std::string JitBuildAction(const ColumnNames_t &bl, std::shared_ptr<RDFDetail::R
                            const unsigned int nSlots, const RColumnRegister &colRegister, RDataSource *ds,
                            std::weak_ptr<RJittedAction> *jittedActionOnHeap, const bool vector2RVec = true);
 
+std::string JitBuildActionDeferred(const ColumnNames_t &bl,
+                           const std::type_info &art, const std::type_info &at, TTree *tree,
+                           const unsigned int nSlots, const RColumnRegister &colRegister, RDataSource *ds,
+                           const bool vector2RVec = true);
+
+
 // Allocate a weak_ptr on the heap, return a pointer to it. The user is responsible for deleting this weak_ptr.
 // This function is meant to be used by RInterface's methods that book code for jitting.
 // The problem it solves is that we generate code to be lazily jitted with the addresses of certain objects in them,

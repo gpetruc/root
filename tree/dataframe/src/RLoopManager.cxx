@@ -71,6 +71,11 @@ std::string &GetCodeToJit()
    static std::string code;
    return code;
 }
+std::string &GetCodeToDeclare()
+{
+   static std::string code;
+   return code;
+}
 
 using JitHelperFunc = void(RLoopManager *, std::shared_ptr<RNodeBase> *, RColumnRegister *, const ColumnNames_t &,
                            void *, void *);
@@ -862,19 +867,22 @@ void RLoopManager::Jit()
 {
    {
       R__READ_LOCKGUARD(ROOT::gCoreMutex);
-      if (GetCodeToJit().empty()) {
+      if (GetCodeToJit().empty() && GetCodeToDeclare().empty()) {
          R__LOG_INFO(RDFLogChannel()) << "Nothing to jit and execute.";
          return;
       }
    }
 
-   const std::string code = []() {
+   std::string codeToDeclare, code;
+   {
       R__WRITE_LOCKGUARD(ROOT::gCoreMutex);
-      return std::move(GetCodeToJit());
-   }();
+      codeToDeclare.swap(GetCodeToDeclare());
+      code.swap(GetCodeToJit());
+   };
 
    TStopwatch s;
    s.Start();
+   ROOT::Internal::RDF::InterpreterDeclare(codeToDeclare);
    RDFInternal::InterpreterCalc(code, "RLoopManager::Run");
    s.Stop();
    R__LOG_INFO(RDFLogChannel()) << "Just-in-time compilation phase completed"
@@ -1086,7 +1094,7 @@ void RLoopManager::RegisterJitHelperCall(const std::string &funcCode, std::share
       R__LOG_DEBUG(0, RDFLogChannel()) << "JitHelper new " << registerId << " defined for funcCode " << funcCode;
       // step 1: register function (now)
       std::string toDeclare = "namespace R_rdf {\n  void " + registerId + funcCode + "\n}\n";
-      ROOT::Internal::RDF::InterpreterDeclare(toDeclare);
+      GetCodeToDeclare().append(toDeclare);
       std::stringstream registration;
       registration
          << "(*(reinterpret_cast<std::unordered_map<std::string,void "

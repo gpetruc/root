@@ -194,15 +194,25 @@ class RLoopManager : public RNodeBase {
       fUniqueVariationsWithReaders;
 
    // deferred function calls to Jitted functions
-   struct DeferredJitCall { 
+   struct DeferredJitCall {
       std::string functionId;
       std::shared_ptr<RNodeBase> *prevNodeOnHeap;
       ROOT::Internal::RDF::RColumnRegister *colRegister;
+      std::vector<std::string> colNames;
       void *wkJittedNode, *argument;
-      DeferredJitCall(const std::string & id, std::shared_ptr<RNodeBase> *prevNode, ROOT::Internal::RDF::RColumnRegister *cols, void *wkNodePtr, void *arg) :
-         functionId(id), prevNodeOnHeap(prevNode), colRegister(cols), wkJittedNode(wkNodePtr), argument(arg) {}
+      DeferredJitCall(const std::string &id, std::shared_ptr<RNodeBase> *prevNode,
+                      ROOT::Internal::RDF::RColumnRegister *cols, const std::vector<std::string> &colnames,
+                      void *wkNodePtr, void *arg)
+         : functionId(id),
+           prevNodeOnHeap(prevNode),
+           colRegister(cols),
+           colNames(colnames),
+           wkJittedNode(wkNodePtr),
+           argument(arg)
+      {
+      }
    };
-   std::vector<DeferredJitCall> fJitHelperCalls; 
+   std::vector<DeferredJitCall> fJitHelperCalls;
 
 public:
    RLoopManager(TTree *tree, const ColumnNames_t &defaultBranches);
@@ -248,7 +258,9 @@ public:
    void IncrChildrenCount() final { ++fNChildren; }
    void StopProcessing() final { ++fNStopsReceived; }
    void ToJitExec(const std::string &) const;
-   void RegisterJitHelperCall(const std::string &funcBody, std::shared_ptr<RNodeBase> *prevNodeOnHeap, ROOT::Internal::RDF::RColumnRegister *colRegister, void *wkJittedPtr, void *argument=nullptr) ;
+   void RegisterJitHelperCall(const std::string &funcBody, std::shared_ptr<RNodeBase> *prevNodeOnHeap,
+                              ROOT::Internal::RDF::RColumnRegister *colRegister,
+                              const std::vector<std::string> &colNames, void *wkJittedPtr, void *argument = nullptr);
    void RegisterCallback(ULong64_t everyNEvents, std::function<void(unsigned int)> &&f);
    unsigned int GetNRuns() const { return fNRuns; }
    bool HasDataSourceColumnReaders(const std::string &col, const std::type_info &ti) const;

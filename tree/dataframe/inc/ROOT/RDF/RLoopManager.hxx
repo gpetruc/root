@@ -229,7 +229,6 @@ public:
    RLoopManager &operator=(RLoopManager &&) = delete;
    ~RLoopManager() override;
 
-   void JitDeclarations();
    void Jit();
    void RunDeferredCalls();
    RLoopManager *GetLoopManagerUnchecked() final { return this; }

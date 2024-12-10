@@ -1872,6 +1872,7 @@ RDataFrame::~RDataFrame()
    // Define node is not jitted. This in turn would cause memory leaks.
    // See https://github.com/root-project/root/issues/15399
    fLoopManager->Jit();
+   fLoopManager->RunDeferredCalls();
 }
 
 namespace RDF {

@@ -869,6 +869,7 @@ void RLoopManager::Jit()
    {
       R__READ_LOCKGUARD(ROOT::gCoreMutex);
       if (GetCodeToJit().empty() && GetCodeToDeclare().empty()) {
+         RunDeferredCalls();
          R__LOG_INFO(RDFLogChannel()) << "Nothing to jit and execute.";
          return;
       }
@@ -887,14 +888,23 @@ void RLoopManager::Jit()
       ROOT::Internal::RDF::InterpreterDeclare(codeToDeclare);
       auto &funcMap = GetJitHelperFuncMap();
       auto &nameMap = GetJitHelperNameMap();
-      std::unique_ptr<TInterpreterValue> ret(gInterpreter->CreateTemporary());
+      auto clinfo = gInterpreter->ClassInfo_Factory("R_rdf");
+      assert(gInterpreter->ClassInfo_IsValid(clinfo));
       for (auto & codeAndName : nameMap) {
          JitHelperFunc * & addr = funcMap[codeAndName.second];
          if (!addr) {
-            gInterpreter->Evaluate(("R_rdf::"+codeAndName.second).c_str(), *ret);
-            addr = reinterpret_cast<JitHelperFunc *>(ret->GetAsPointer());
+            // fast fetch of the address via gInterpreter
+            // (faster than gInterpreter->Evaluate(function name, ret), ret->GetAsPointer())
+            auto declid = gInterpreter->GetFunction(clinfo, codeAndName.second.c_str());
+            assert(declid);
+            auto minfo  = gInterpreter->MethodInfo_Factory(declid);
+            assert(gInterpreter->MethodInfo_IsValid(minfo));
+            auto mname = gInterpreter->MethodInfo_GetMangledName(minfo);
+            addr = reinterpret_cast<JitHelperFunc *>(gInterpreter->FindSym(mname));
+            gInterpreter->MethodInfo_Delete(minfo);
          }
       }
+      gInterpreter->ClassInfo_Delete(clinfo);
    }
    if (!code.empty()) {
       RDFInternal::InterpreterCalc(code, "RLoopManager::Run");
@@ -903,6 +913,8 @@ void RLoopManager::Jit()
    R__LOG_INFO(RDFLogChannel()) << "Just-in-time compilation phase completed"
                                 << (s.RealTime() > 1e-3 ? " in " + std::to_string(s.RealTime()) + " seconds."
                                                         : " in less than 1ms.");
+
+   RunDeferredCalls();
 }
 
 void RLoopManager::RunDeferredCalls()

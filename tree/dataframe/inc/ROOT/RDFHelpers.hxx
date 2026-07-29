@@ -219,6 +219,28 @@ namespace Experimental {
 //                       N*#input_cols column readers
 //
 // ...and each RFilter and RDefine knows for what universe it needs to construct column readers ("nominal" by default).
+
+namespace Internal {
+   /// @brief Helper function to add a copy of an object to a vector of shared_ptrs, used for variations. 
+   /// Default implementation uses copy constructor, which should work for most objects types since they are copied for each slot.
+   /// @tparam T An object that is used as result of a RDataFrame action, e.g. a histogram
+   /// @param vec The vector of shared_ptrs to which a copy of obj will be added
+   /// @param obj The object to be copied and added to vec
+   template <typename T>
+   void addCopyForVariations(std::vector<std::shared_ptr<T>> &vec, const T & obj)
+   {
+      vec.emplace_back(std::make_shared<T>(obj));
+   }
+
+   /// @brief Specialization of addCopyForVariations for ROOT::Experimental::RHist objects, which are not copyable but clonable
+   template<typename B>
+   void addCopyForVariations(std::vector<std::shared_ptr<ROOT::Experimental::RHist<B>>> &vec, const ROOT::Experimental::RHist<B> & obj)
+   {
+      // Note that Clone() returns a value and not a pointer, so we call 'new' and pass that value to the RHist move constructor 
+      vec.emplace_back(std::make_shared<ROOT::Experimental::RHist<B>>(obj.Clone()));
+   }
+}
+
 template <typename T>
 RResultMap<T> VariationsFor(RResultPtr<T> resPtr)
 {
@@ -243,9 +265,9 @@ RResultMap<T> VariationsFor(RResultPtr<T> resPtr)
       // clone the result once for each variation
       variedResults.reserve(nVariations);
       for (auto i = 0u; i < nVariations; ++i){
-         // implicitly assuming that T is copiable: this should be the case
-         // for all result types in use, as they are copied for each slot
-         variedResults.emplace_back(new T{*resPtr.fObjPtr});
+
+         // make a copy of the result object for this variation
+         Internal::addCopyForVariations(variedResults, *resPtr.fObjPtr);         
 
          // Check if the result's type T inherits from TNamed
          if constexpr (std::is_base_of<TNamed, T>::value) {

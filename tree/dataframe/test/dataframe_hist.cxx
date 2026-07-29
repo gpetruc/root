@@ -715,6 +715,41 @@ TEST_P(RDFHist, EngineWeightContainer)
    }
 }
 
+TEST_P(RDFHist, Variations)
+{
+   RDataFrame df(10);
+   auto dfX = df.Define("x", [](ULong64_t e) -> Float_t { return e + 5.5f; }, {"rdfentry_"})
+                .Vary("x", [](Float_t x) { return ROOT::RVecF{x - 1.0f, x + 1.0f}; }, {"x"}, 2);
+
+   const RRegularAxis axis(10, {5.0, 15.0});
+   auto hist = dfX.Hist</*BinContentType=*/double, Float_t>({axis}, {"x"});
+   auto vars = ROOT::RDF::Experimental::VariationsFor(hist);
+
+   // Check nominal
+   EXPECT_EQ(hist->GetNEntries(), 10);
+   for (auto index : axis.GetNormalRange()) {
+      EXPECT_EQ(hist->GetBinContent(index), 1.0);
+   }
+
+   // Check variations
+   EXPECT_EQ(vars.GetKeys().size(), 3); // nominal + 2 variations
+   for (const auto &key : vars.GetKeys()) {
+      auto &varHist = vars[key];
+      EXPECT_EQ(varHist.GetNEntries(), 10);
+      for (auto index : axis.GetNormalRange()) {
+         if (key == "nominal") {
+            EXPECT_EQ(varHist.GetBinContent(index), 1.0);
+         } else if (key == "x:0") {
+            EXPECT_EQ(varHist.GetBinContent(index), (index.GetIndex() == 9 ? 0.0 : 1.0));
+         } else if (key == "x:1") {
+            EXPECT_EQ(varHist.GetBinContent(index), (index.GetIndex() == 0 ? 0.0 : 1.0));  
+         } else {
+            FAIL() << "Unexpected variation key: " << key;
+         }
+      }
+   }
+}
+
 INSTANTIATE_TEST_SUITE_P(Seq, RDFHist, ::testing::Values(false));
 
 #ifdef R__USE_IMT

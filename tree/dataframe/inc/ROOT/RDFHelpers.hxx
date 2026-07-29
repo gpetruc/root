@@ -239,6 +239,14 @@ namespace Internal {
       // Note that Clone() returns a value and not a pointer, so we call 'new' and pass that value to the RHist move constructor 
       vec.emplace_back(std::make_shared<ROOT::Experimental::RHist<B>>(obj.Clone()));
    }
+
+   /// @brief Specialization of addCopyForVariations for ROOT::Experimental::RHistEngine objects, which are not copyable but clonable
+   template<typename B>
+   void addCopyForVariations(std::vector<std::shared_ptr<ROOT::Experimental::RHistEngine<B>>> &vec, const ROOT::Experimental::RHistEngine<B> & obj)
+   {
+      // Note that Clone() returns a value and not a pointer, so we call 'new' and pass that value to the RHist move constructor 
+      vec.emplace_back(std::make_shared<ROOT::Experimental::RHistEngine<B>>(obj.Clone()));
+   }   
 }
 
 template <typename T>

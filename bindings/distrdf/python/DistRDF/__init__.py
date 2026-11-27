@@ -18,10 +18,11 @@ import logging
 import textwrap
 import types
 import warnings
-from typing import TYPE_CHECKING, Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable, Optional
 
 from .Backends import build_backends_submodules
 from .LiveVisualize import LiveVisualize
+from .TaskProgressBar import GetProgressBar, SetProgressBar, TaskProgressBar
 
 if TYPE_CHECKING:
     from .Proxy import ResultMapProxy, ResultPtrProxy
@@ -105,7 +106,7 @@ def DistributeSharedLibs(paths_to_shared_libraries: Iterable[str]) -> None:
     Base.BaseBackend.register_shared_lib(paths_to_shared_libraries)
 
 
-def RunGraphs(proxies: Iterable) -> int:
+def RunGraphs(proxies: Iterable, progressBar: Optional[bool] = None) -> int:
     """
     Trigger the execution of multiple RDataFrame computation graphs on a certain
     distributed backend. If the backend doesn't support multiple job
@@ -116,6 +117,12 @@ def RunGraphs(proxies: Iterable) -> int:
         proxies(list): List of action proxies that should be triggered. Only
             actions belonging to different RDataFrame graphs will be
             triggered to avoid useless calls.
+
+        progressBar (bool, optional): whether to show a progress bar for the
+            whole set of tasks. If None (default), the global setting
+            configured with `SetProgressBar` is used. When disabled, no
+            progress bar is shown at all, including the progress bars of the
+            underlying backend (e.g. the Dask progress bar).
 
     Return:
         (int): The number of unique computation graphs executed by this call.
@@ -152,10 +159,18 @@ def RunGraphs(proxies: Iterable) -> int:
     # Get proxies belonging to distinct computation graphs
     uniqueproxies = list({proxy.proxied_node.get_head(): proxy for proxy in proxies}.values())
 
+    # Resolve the progress bar setting for this call
+    if progressBar is None:
+        progressBar = GetProgressBar()
+
     # Submit all computation graphs concurrently from multiple Python threads.
     # The submission is not computationally intensive
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(uniqueproxies)) as executor:
-        futures = [executor.submit(execute_graph, proxy.proxied_node) for proxy in uniqueproxies]
+        pbar = TaskProgressBar() if progressBar else False
+        futures = [executor.submit(execute_graph, proxy.proxied_node, progressBar=pbar) for proxy in uniqueproxies]
+        if progressBar:
+            pbar.addFutures(futures)
+            pbar.run()
         concurrent.futures.wait(futures)
 
         # Retrieve the result of each graph execution. This re-raises any
@@ -266,6 +281,8 @@ def create_distributed_module(parentmodule, experimental: bool = False):
     # Inject top-level functions
     distributed.initialize = _raise_warning_if_experimental(initialize, experimental)
     distributed.RunGraphs = _raise_warning_if_experimental(RunGraphs, experimental)
+    distributed.SetProgressBar = _raise_warning_if_experimental(SetProgressBar, experimental)
+    distributed.GetProgressBar = _raise_warning_if_experimental(GetProgressBar, experimental)
     distributed.VariationsFor = _raise_warning_if_experimental(VariationsFor, experimental)
     distributed.LiveVisualize = _raise_warning_if_experimental(LiveVisualize, experimental)
     distributed.DistributeHeaders = _raise_warning_if_experimental(DistributeHeaders, experimental)

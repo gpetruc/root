@@ -21,6 +21,7 @@ ROOT_PYTHON_PACKAGE(DistRDF
     Proxy.py
     PythonMergeables.py
     Ranges.py
+    TaskProgressBar.py
     Backends/__init__.py
     Backends/Base.py
     Backends/Utils.py

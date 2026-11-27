@@ -37,12 +37,14 @@ def _rungraphs(distrdf_rungraphs, rdf_rungraphs):
     distributed version of RunGraphs.
     """
 
-    def rungraphs(handles):
+    def rungraphs(handles, progressBar=None):
         # Caveat: we should not call `hasattr` on the result pointer, since
         # this will implicitly trigger the connected computation graph
         if len(handles) > 0 and "_distrdf" in str(type(handles[0])):
-            return distrdf_rungraphs(handles)
+            return distrdf_rungraphs(handles, progressBar=progressBar)
         else:
+            # The local RDataFrame RunGraphs does not show any progress bar,
+            # the argument is accepted and ignored
             return rdf_rungraphs(handles)
 
     return rungraphs

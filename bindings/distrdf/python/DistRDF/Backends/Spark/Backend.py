@@ -94,6 +94,7 @@ class SparkBackend(Base.BaseBackend):
             Base.TaskResult,
         ],
         reducer: Callable[[Base.TaskResult, Base.TaskResult], Base.TaskResult],
+        **kwargs,
     ) -> Base.TaskResult:
         """
         Performs map-reduce using Spark framework.
@@ -153,7 +154,7 @@ class SparkBackend(Base.BaseBackend):
         # Map-Reduce using Spark
         return parallel_collection.map(spark_mapper).treeReduce(reducer)
 
-    def ProcessAndMergeLive(self, ranges, mapper, reducer, drawables_info_dict):
+    def ProcessAndMergeLive(self, ranges, mapper, reducer, drawables_info_dict, **kwargs):
         """
         Informs the user that the live visualization feature is not supported for the Spark backend
         and refers to ProcessAndMerge to proceed with the standard map-reduce workflow.

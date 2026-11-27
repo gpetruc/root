@@ -22,6 +22,7 @@ import ROOT
 
 from . import Operation
 from .Node import Node
+from .TaskProgressBar import GetProgressBar
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +45,28 @@ def _managed_tcontext():
         ctxt.__destruct__()
 
 
-def execute_graph(node: Node) -> None:
+def execute_graph(node: Node, progressBar=None) -> None:
     """
     Executes the distributed RDataFrame computation graph the input node
     belongs to. If the node already has a value, this is a no-op.
+
+    Args:
+        node: the node whose computation graph will be executed.
+
+        progressBar: whether to show a progress bar for the computation. It
+            can also be a `TaskProgressBar` instance shared across graph
+            executions. When None (default), the global setting configured
+            with `SetProgressBar` is used.
     """
     if node.value is None:  # If event-loop not triggered
+        if progressBar is None:
+            progressBar = GetProgressBar()
         # Creating a ROOT.TDirectory.TContext in a context manager so that
         # ROOT.gDirectory won't be changed by the event loop execution.
         with _managed_tcontext():
             # All the information needed to reconstruct the computation graph on
             # the workers is contained in the head node
-            node.get_head().execute_graph()
+            node.get_head().execute_graph(progressBar=progressBar)
 
 
 def _update_internal_df_with_transformation(node: Node, operation: Operation) -> None:

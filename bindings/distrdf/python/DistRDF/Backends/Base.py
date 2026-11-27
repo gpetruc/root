@@ -253,6 +253,7 @@ class BaseBackend(ABC):
         ranges: List[DataRange],
         mapper: Callable[..., TaskResult],
         reducer: Callable[[TaskResult, TaskResult], TaskResult],
+        **kwargs,
     ) -> TaskResult:
         """
         Subclasses must define how to run map-reduce functions on a given

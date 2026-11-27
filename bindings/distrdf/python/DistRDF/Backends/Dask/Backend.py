@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import ROOT
 from ROOT._distrdf import DataFrame, HeadNode
 from ROOT._distrdf.Backends import Base, Utils
+from ROOT._distrdf.TaskProgressBar import TaskProgressBar
 
 try:
     import dask
@@ -200,6 +201,7 @@ class DaskBackend(Base.BaseBackend):
             Base.TaskResult,
         ],
         reducer: Callable[[Base.TaskResult, Base.TaskResult], Base.TaskResult],
+        **kwargs,
     ) -> Base.TaskResult:
         """
         Performs map-reduce using Dask framework.
@@ -212,6 +214,8 @@ class DaskBackend(Base.BaseBackend):
             reducer (function): A function that merges two lists that were
                 returned by the mapper.
 
+            **kwargs: options. The only used one is progressBar (default: True)
+
         Returns:
             list: A list representing the values of action nodes returned
             after computation (Map-Reduce).
@@ -221,29 +225,36 @@ class DaskBackend(Base.BaseBackend):
         self.distribute_unique_paths(self.pcms)
         self.distribute_unique_paths(self.files)
 
-        dmapper = dask.delayed(DaskBackend.dask_mapper)
-        dreducer = dask.delayed(reducer)
+        def dmapper(range):
+            return self.client.submit(
+                DaskBackend.dask_mapper, range, self.headers, self.shared_libraries, self.pcms, self.files, mapper
+            )
 
-        mergeables_lists = [
-            dmapper(range, self.headers, self.shared_libraries, self.pcms, self.files, mapper) for range in ranges
-        ]
+        def dreducer(a, b):
+            return self.client.submit(reducer, a, b)
+
+        mergeables_lists = [dmapper(range) for range in ranges]
+        all_futures = mergeables_lists[:]
 
         while len(mergeables_lists) > 1:
-            mergeables_lists.append(dreducer(mergeables_lists.pop(0), mergeables_lists.pop(0)))
+            reduced = dreducer(mergeables_lists.pop(0), mergeables_lists.pop(0))
+            mergeables_lists.append(reduced)
+            all_futures.append(reduced)
 
         # Here we start the progressbar for the current RDF computation graph
-        # running on the Dask client. This expects a future object, so we need
-        # convert the last delayed object from the list above to a future
-        # through the `persist` call. This also starts the computation in the
-        # background, but the time difference is negligible. The progressbar is
-        # properly shown in the terminal, whereas in the notebook it can be
-        # shown only if it's the last call in a cell. Since we're encapsulating
-        # it in this class, it won't be shown. Full details at
+        # running on the Dask client. The progressbar is properly shown in the
+        # terminal, whereas in the notebook it can be shown only if it's the
+        # last call in a cell. Since we're encapsulating it in this class, it
+        # won't be shown. Full details at
         # https://docs.dask.org/en/latest/diagnostics-distributed.html#dask.distributed.progress
-        final_results = mergeables_lists.pop().persist()
-        progress(final_results)
+        final_results = mergeables_lists.pop()
+        pbar = kwargs.get("progressBar", True)
+        if isinstance(pbar, TaskProgressBar):
+            pbar.addFutures(all_futures)
+        elif pbar:
+            progress(final_results)
 
-        return final_results.compute()
+        return final_results.result()
 
     def ProcessAndMergeLive(
         self,
@@ -259,6 +270,7 @@ class DaskBackend(Base.BaseBackend):
         ],
         reducer: Callable[[Base.TaskResult, Base.TaskResult], Base.TaskResult],
         drawables_info_dict: Dict[int, Tuple[List[Optional[Callable]], int, str]],
+        **kwargs,
     ) -> Base.TaskResult:
         """
         Performs real-time map-reduce using Dask framework, retrieving the partial results
